@@ -86,6 +86,15 @@ const (
 	beep = "\a"
 )
 
+var (
+	brackets map[rune]rune = map[rune]rune{
+		'(': ')',
+		'[': ']',
+		'{': '}',
+		'"': '"',
+	}
+)
+
 type tabDirection int
 
 const (
@@ -661,6 +670,21 @@ mainLoop:
 		switch v := next.(type) {
 		case rune:
 			switch v {
+			case '(', '[', '{', '"':
+				if pos < len(line) && line[pos] == v {
+					pos++
+					s.needRefresh = true
+				} else {
+					line = append(line[:pos], append([]rune{v, brackets[v]}, line[pos:]...)...)
+					pos++
+					s.needRefresh = true
+				}
+			case ')', ']', '}':
+				if pos >= len(line) || line[pos] != v {
+					line = append(line[:pos], append([]rune{v}, line[pos:]...)...)
+				}
+				pos++
+				s.needRefresh = true
 			case cr, lf:
 				if s.needRefresh {
 					err := s.refresh(p, line, pos)
@@ -796,9 +820,21 @@ mainLoop:
 				if pos <= 0 {
 					s.doBeep()
 				} else {
-					n := len(getSuffixGlyphs(line[:pos], 1))
-					line = append(line[:pos-n], line[pos:]...)
-					pos -= n
+					r := line[pos-1]
+					if r == ')' || r == ']' || r == '}' || (r == '"' && pos == len(line)) {
+						pos--
+					} else if pos < len(line) && (r == '(' || r == '[' || r == '{' || r == '"') {
+						if line[pos] != brackets[r] {
+							pos--
+						} else {
+							line = append(line[:pos-1], line[pos+1:]...)
+							pos--
+						}
+					} else {
+						n := len(getSuffixGlyphs(line[:pos], 1))
+						line = append(line[:pos-n], line[pos:]...)
+						pos -= n
+					}
 					s.needRefresh = true
 				}
 			case ctrlU: // Erase line before cursor
@@ -953,18 +989,18 @@ mainLoop:
 					s.doBeep()
 					break
 				}
-				// Remove whitespace to the right
+				// Remove delimiters to the right
 				var buf []rune // Store the deleted chars in a buffer
 				for {
-					if pos == len(line) || !unicode.IsSpace(line[pos]) {
+					if pos == len(line) || !isDelimiter(line[pos]) {
 						break
 					}
 					buf = append(buf, line[pos])
 					line = append(line[:pos], line[pos+1:]...)
 				}
-				// Remove non-whitespace to the right
+				// Remove non-delimiters to the right
 				for {
-					if pos == len(line) || unicode.IsSpace(line[pos]) {
+					if pos == len(line) || isDelimiter(line[pos]) {
 						break
 					}
 					buf = append(buf, line[pos])
@@ -1138,24 +1174,33 @@ func (s *State) tooNarrow(prompt string) (string, error) {
 	return s.promptUnsupported(prompt)
 }
 
+func isDelimiter(r rune) bool {
+	switch r {
+	case '(', ')', '[', ']', '{', '}', '"', '/':
+		return true
+	default:
+		return unicode.IsSpace(r) || r == '(' || r == ')'
+	}
+}
+
 func (s *State) eraseWord(pos int, line []rune, killAction int) (int, []rune, int) {
 	if pos == 0 {
 		s.doBeep()
 		return pos, line, killAction
 	}
-	// Remove whitespace to the left
+	// Remove delimiters to the left
 	var buf []rune // Store the deleted chars in a buffer
 	for {
-		if pos == 0 || !unicode.IsSpace(line[pos-1]) {
+		if pos == 0 || !isDelimiter(line[pos-1]) {
 			break
 		}
 		buf = append(buf, line[pos-1])
 		line = append(line[:pos-1], line[pos:]...)
 		pos--
 	}
-	// Remove non-whitespace to the left
+	// Remove non-delimiters to the left
 	for {
-		if pos == 0 || unicode.IsSpace(line[pos-1]) {
+		if pos == 0 || isDelimiter(line[pos-1]) {
 			break
 		}
 		buf = append(buf, line[pos-1])
