@@ -671,11 +671,15 @@ mainLoop:
 		case rune:
 			switch v {
 			case '(', '[', '{', '"':
-				line = append(line[:pos], append([]rune{v, brackets[v]}, line[pos:]...)...)
+				if s.inputWaiting() {
+					line = append(line[:pos], append([]rune{v}, line[pos:]...)...)
+				} else {
+					line = append(line[:pos], append([]rune{v, brackets[v]}, line[pos:]...)...)
+				}
 				pos++
 				s.needRefresh = true
 			case ')', ']', '}':
-				if pos >= len(line) || line[pos] != v {
+				if s.inputWaiting() || pos >= len(line) || line[pos] != v {
 					line = append(line[:pos], append([]rune{v}, line[pos:]...)...)
 				}
 				pos++
