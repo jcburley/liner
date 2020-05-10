@@ -5,6 +5,7 @@ package liner
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"strconv"
@@ -48,12 +49,6 @@ func NewLiner() *State {
 		s.terminalSupported = false
 	}
 	if s.terminalSupported && !s.inputRedirected && !s.outputRedirected {
-		mode := s.origMode
-		mode.Iflag &^= icrnl | inpck | istrip | ixon
-		mode.Cflag |= cs8
-		mode.Lflag &^= syscall.ECHO | icanon | iexten
-		mode.ApplyMode()
-
 		winch := make(chan os.Signal, 1)
 		signal.Notify(winch, syscall.SIGWINCH)
 		s.winch = winch
@@ -68,17 +63,31 @@ func NewLiner() *State {
 	return &s
 }
 
-var errTimedOut = errors.New("timeout")
-
-func (s *State) startPrompt() {
+func (s *State) enterRawMode() {
 	if s.terminalSupported {
 		if m, err := TerminalMode(); err == nil {
 			s.defaultMode = *m.(*termios)
 			mode := s.defaultMode
-			mode.Lflag &^= isig
+			mode.Iflag &^= icrnl | inpck | istrip | ixon
+			mode.Cflag |= cs8
+			mode.Lflag &^= syscall.ECHO | isig | icanon | iexten
+			mode.Cc[syscall.VMIN] = 1
+			mode.Cc[syscall.VTIME] = 0
 			mode.ApplyMode()
 		}
 	}
+}
+
+func (s *State) exitRawMode() {
+	if s.terminalSupported {
+		s.defaultMode.ApplyMode()
+	}
+}
+
+var errTimedOut = errors.New("timeout")
+
+func (s *State) startPrompt() {
+	s.enterRawMode()
 	s.restartPrompt()
 }
 
@@ -94,7 +103,7 @@ func (s *State) restartPrompt() {
 			n.r, _, n.err = s.r.ReadRune()
 			next <- n
 			// Shut down nexter loop when an end condition has been reached
-			if n.err != nil || n.r == '\n' || n.r == '\r' || n.r == ctrlC || n.r == ctrlD {
+			if n.err != nil || n.r == '\n' || n.r == '\r' || n.r == ctrlC || mapRune(n.r) == ctrlD {
 				close(next)
 				return
 			}
@@ -104,9 +113,42 @@ func (s *State) restartPrompt() {
 }
 
 func (s *State) stopPrompt() {
-	if s.terminalSupported {
-		s.defaultMode.ApplyMode()
-	}
+	s.exitRawMode()
+}
+
+func (s *State) suspendFn() {
+	fmt.Println("^Z")
+	s.exitRawMode()
+	cont := make(chan os.Signal, 1)
+	signal.Notify(cont, syscall.SIGCONT)
+	defer func() { signal.Stop(cont) }()
+	syscall.Kill(syscall.Getpid(), syscall.SIGTSTP)
+	<-cont
+	s.enterRawMode()
+}
+
+func (s *State) quitFn() {
+	fmt.Println("^\\")
+	s.exitRawMode()
+	// There's no reason to expect a SIGCONT, but by waiting for
+	// one anyway, the return to raw mode is avoided before the
+	// SIGQUIT reaches another thread, is processed, and the
+	// process terminates. If the client wishes to ignore SIGQUIT,
+	// it'll have to SIGCONT before ignoring to keep this liner
+	// instance running.
+	cont := make(chan os.Signal, 1)
+	signal.Notify(cont, syscall.SIGCONT)
+	syscall.Kill(syscall.Getpid(), syscall.SIGQUIT)
+	<-cont
+	s.enterRawMode()
+}
+
+func echoEOF() {
+	fmt.Println("^D")
+}
+
+func mapRune(r rune) rune {
+	return r
 }
 
 func (s *State) nextPending(timeout <-chan time.Time) (rune, error) {
