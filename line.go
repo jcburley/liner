@@ -1088,10 +1088,6 @@ func (s *State) PasswordPrompt(prompt string) (string, error) {
 	}
 
 	p := []rune(prompt)
-	const minWorkingSpace = 1
-	if s.columns < countGlyphs(p)+minWorkingSpace {
-		return s.tooNarrow(prompt)
-	}
 
 	defer s.stopPrompt()
 
@@ -1117,15 +1113,6 @@ mainLoop:
 		case rune:
 			switch mapRune(v) {
 			case cr, lf:
-				if s.needRefresh {
-					err := s.refresh(p, line, pos)
-					if err != nil {
-						return "", err
-					}
-				}
-				if s.multiLineMode {
-					s.resetMultiLine(p, line, pos)
-				}
 				fmt.Println()
 				break mainLoop
 			case ctrlD: // del
@@ -1153,9 +1140,6 @@ mainLoop:
 				}
 			case ctrlC:
 				fmt.Println("^C")
-				if s.multiLineMode {
-					s.resetMultiLine(p, line, pos)
-				}
 				if s.ctrlCAborts {
 					return "", ErrPromptAborted
 				}
